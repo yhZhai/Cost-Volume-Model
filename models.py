@@ -2,14 +2,12 @@ from torch import nn
 
 from ops.basic_ops import ConsensusModule, Identity
 from transforms import *
-from torch.nn.init import normal, constant
+from torch.nn.init import normal_, constant_
+
 
 class TSN(nn.Module):
-    def __init__(self, num_class, num_segments, modality,
-                 base_model='resnet101', new_length=None,
-                 consensus_type='avg', before_softmax=True,
-                 dropout=0.8,
-                 crop_num=1, partial_bn=True):
+    def __init__(self, num_class, num_segments, modality, base_model='resnet101', new_length=None, consensus_type='avg', before_softmax=True,
+                 dropout=0.8, crop_num=1):
         super(TSN, self).__init__()
         self.modality = modality
         self.num_segments = num_segments
@@ -54,10 +52,6 @@ TSN Configurations:
         if not self.before_softmax:
             self.softmax = nn.Softmax()
 
-        self._enable_pbn = partial_bn
-        if partial_bn:
-            self.partialBN(True)
-
     def _prepare_tsn(self, num_class):
         feature_dim = getattr(self.base_model, self.base_model.last_layer_name).in_features
         if self.dropout == 0:
@@ -69,11 +63,11 @@ TSN Configurations:
 
         std = 0.001
         if self.new_fc is None:
-            normal(getattr(self.base_model, self.base_model.last_layer_name).weight, 0, std)
-            constant(getattr(self.base_model, self.base_model.last_layer_name).bias, 0)
+            normal_(getattr(self.base_model, self.base_model.last_layer_name).weight, 0, std)
+            constant_(getattr(self.base_model, self.base_model.last_layer_name).bias, 0)
         else:
-            normal(self.new_fc.weight, 0, std)
-            constant(self.new_fc.bias, 0)
+            normal_(self.new_fc.weight, 0, std)
+            constant_(self.new_fc.bias, 0)
         return feature_dim
 
     def _prepare_base_model(self, base_model):
@@ -114,78 +108,76 @@ TSN Configurations:
         else:
             raise ValueError('Unknown base model: {}'.format(base_model))
 
-    def train(self, mode=True):
-        """
-        Override the default train() to freeze the BN parameters
-        :return:
-        """
-        super(TSN, self).train(mode)
-        count = 0
-        if self._enable_pbn:
-            print("Freezing BatchNorm2D except the first one.")
-            for m in self.base_model.modules():
-                if isinstance(m, nn.BatchNorm2d):
-                    count += 1
-                    if count >= (2 if self._enable_pbn else 1):
-                        m.eval()
+    # def train(self, mode=True):
+    #     """
+    #     Override the default train() to freeze the BN parameters
+    #     :return:
+    #     """
+    #     super(TSN, self).train(mode)
+    #     count = 0
+    #     if self._enable_pbn:
+    #         print("Freezing BatchNorm2D except the first one.")
+    #         for m in self.base_model.modules():
+    #             if isinstance(m, nn.BatchNorm2d):
+    #                 count += 1
+    #                 if count >= (2 if self._enable_pbn else 1):
+    #                     m.eval()
+    #
+    #                     # shutdown update in frozen mode
+    #                     m.weight.requires_grad = False
+    #                     m.bias.requires_grad = False
 
-                        # shutdown update in frozen mode
-                        m.weight.requires_grad = False
-                        m.bias.requires_grad = False
 
-    def partialBN(self, enable):
-        self._enable_pbn = enable
-
-    def get_optim_policies(self):
-        first_conv_weight = []
-        first_conv_bias = []
-        normal_weight = []
-        normal_bias = []
-        bn = []
-
-        conv_cnt = 0
-        bn_cnt = 0
-        for m in self.modules():
-            if isinstance(m, torch.nn.Conv2d) or isinstance(m, torch.nn.Conv1d):
-                ps = list(m.parameters())
-                conv_cnt += 1
-                if conv_cnt == 1:
-                    first_conv_weight.append(ps[0])
-                    if len(ps) == 2:
-                        first_conv_bias.append(ps[1])
-                else:
-                    normal_weight.append(ps[0])
-                    if len(ps) == 2:
-                        normal_bias.append(ps[1])
-            elif isinstance(m, torch.nn.Linear):
-                ps = list(m.parameters())
-                normal_weight.append(ps[0])
-                if len(ps) == 2:
-                    normal_bias.append(ps[1])
-                  
-            elif isinstance(m, torch.nn.BatchNorm1d):
-                bn.extend(list(m.parameters()))
-            elif isinstance(m, torch.nn.BatchNorm2d):
-                bn_cnt += 1
-                # later BN's are frozen
-                if not self._enable_pbn or bn_cnt == 1:
-                    bn.extend(list(m.parameters()))
-            elif len(m._modules) == 0:
-                if len(list(m.parameters())) > 0:
-                    raise ValueError("New atomic module type: {}. Need to give it a learning policy".format(type(m)))
-
-        return [
-            {'params': first_conv_weight, 'lr_mult': 5 if self.modality == 'Flow' else 1, 'decay_mult': 1,
-             'name': "first_conv_weight"},
-            {'params': first_conv_bias, 'lr_mult': 10 if self.modality == 'Flow' else 2, 'decay_mult': 0,
-             'name': "first_conv_bias"},
-            {'params': normal_weight, 'lr_mult': 1, 'decay_mult': 1,
-             'name': "normal_weight"},
-            {'params': normal_bias, 'lr_mult': 2, 'decay_mult': 0,
-             'name': "normal_bias"},
-            {'params': bn, 'lr_mult': 1, 'decay_mult': 0,
-             'name': "BN scale/shift"},
-        ]
+    # def get_optim_policies(self):
+    #     first_conv_weight = []
+    #     first_conv_bias = []
+    #     normal_weight = []
+    #     normal_bias = []
+    #     bn = []
+    #
+    #     conv_cnt = 0
+    #     bn_cnt = 0
+    #     for m in self.modules():
+    #         if isinstance(m, torch.nn.Conv2d) or isinstance(m, torch.nn.Conv1d):
+    #             ps = list(m.parameters())
+    #             conv_cnt += 1
+    #             if conv_cnt == 1:
+    #                 first_conv_weight.append(ps[0])
+    #                 if len(ps) == 2:
+    #                     first_conv_bias.append(ps[1])
+    #             else:
+    #                 normal_weight.append(ps[0])
+    #                 if len(ps) == 2:
+    #                     normal_bias.append(ps[1])
+    #         elif isinstance(m, torch.nn.Linear):
+    #             ps = list(m.parameters())
+    #             normal_weight.append(ps[0])
+    #             if len(ps) == 2:
+    #                 normal_bias.append(ps[1])
+    #
+    #         elif isinstance(m, torch.nn.BatchNorm1d):
+    #             bn.extend(list(m.parameters()))
+    #         elif isinstance(m, torch.nn.BatchNorm2d):
+    #             bn_cnt += 1
+    #             # later BN's are frozen
+    #             if not self._enable_pbn or bn_cnt == 1:
+    #                 bn.extend(list(m.parameters()))
+    #         elif len(m._modules) == 0:
+    #             if len(list(m.parameters())) > 0:
+    #                 raise ValueError("New atomic module type: {}. Need to give it a learning policy".format(type(m)))
+    #
+    #     return [
+    #         {'params': first_conv_weight, 'lr_mult': 5 if self.modality == 'Flow' else 1, 'decay_mult': 1,
+    #          'name': "first_conv_weight"},
+    #         {'params': first_conv_bias, 'lr_mult': 10 if self.modality == 'Flow' else 2, 'decay_mult': 0,
+    #          'name': "first_conv_bias"},
+    #         {'params': normal_weight, 'lr_mult': 1, 'decay_mult': 1,
+    #          'name': "normal_weight"},
+    #         {'params': normal_bias, 'lr_mult': 2, 'decay_mult': 0,
+    #          'name': "normal_bias"},
+    #         {'params': bn, 'lr_mult': 1, 'decay_mult': 0,
+    #          'name': "BN scale/shift"},
+    #     ]
 
     def forward(self, input):
         sample_len = (3 if self.modality == "RGB" else 2) * self.new_length
@@ -223,7 +215,6 @@ TSN Configurations:
 
         return new_data
 
-
     def _construct_flow_model(self, base_model):
         # modify the convolution layers
         # Torch models are usually defined in a hierarchical way.
@@ -236,7 +227,7 @@ TSN Configurations:
         # modify parameters, assume the first blob contains the convolution kernels
         params = [x.clone() for x in conv_layer.parameters()]
         kernel_size = params[0].size()
-        new_kernel_size = kernel_size[:1] + (2 * self.new_length, ) + kernel_size[2:]
+        new_kernel_size = kernel_size[:1] + (2 * self.new_length,) + kernel_size[2:]
         new_kernels = params[0].data.mean(dim=1, keepdim=True).expand(new_kernel_size).contiguous()
 
         new_conv = nn.Conv2d(2 * self.new_length, conv_layer.out_channels,
@@ -244,8 +235,8 @@ TSN Configurations:
                              bias=True if len(params) == 2 else False)
         new_conv.weight.data = new_kernels
         if len(params) == 2:
-            new_conv.bias.data = params[1].data # add bias if neccessary
-        layer_name = list(container.state_dict().keys())[0][:-7] # remove .weight suffix to get the layer name
+            new_conv.bias.data = params[1].data  # add bias if neccessary
+        layer_name = list(container.state_dict().keys())[0][:-7]  # remove .weight suffix to get the layer name
 
         # replace the first convlution layer
         setattr(container, layer_name, new_conv)

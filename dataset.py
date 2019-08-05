@@ -6,6 +6,7 @@ import os.path
 import numpy as np
 from numpy.random import randint
 
+
 class VideoRecord(object):
     def __init__(self, row):
         self._data = row
@@ -40,7 +41,7 @@ class TSNDataSet(data.Dataset):
         self.test_mode = test_mode
 
         if self.modality == 'RGBDiff':
-            self.new_length += 1# Diff needs one more image to calculate diff
+            self.new_length += 1  # Diff needs one more image to calculate diff
 
         self._parse_list()
 
