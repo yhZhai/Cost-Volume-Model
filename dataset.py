@@ -25,10 +25,8 @@ class VideoRecord(object):
 
 
 class TSNDataSet(data.Dataset):
-    def __init__(self, root_path, list_file,
-                 num_segments=3, new_length=1, modality='RGB',
-                 image_tmpl='img_{:05d}.jpg', transform=None,
-                 force_grayscale=False, random_shift=True, test_mode=False):
+    def __init__(self, root_path, list_file, num_segments=3, new_length=1, modality='RGB', image_tmpl='img_{:05d}.jpg', transform=None,
+                 random_shift=True, test_mode=False):
 
         self.root_path = root_path
         self.list_file = list_file
@@ -40,13 +38,13 @@ class TSNDataSet(data.Dataset):
         self.random_shift = random_shift
         self.test_mode = test_mode
 
-        if self.modality == 'RGBDiff':
-            self.new_length += 1  # Diff needs one more image to calculate diff
+        if self.modality in ['RGBDiff', 'CV']:
+            self.new_length += 1  # Diff and CV need one more image to calculate
 
         self._parse_list()
 
     def _load_image(self, directory, idx):
-        if self.modality == 'RGB' or self.modality == 'RGBDiff':
+        if self.modality in ['RGB', 'RGBDiff', 'CV']:
             return [Image.open(os.path.join(directory, self.image_tmpl.format(idx))).convert('RGB')]
         elif self.modality == 'Flow':
             x_img = Image.open(os.path.join(directory, self.image_tmpl.format('x', idx))).convert('L')
@@ -82,25 +80,19 @@ class TSNDataSet(data.Dataset):
         return offsets + 1
 
     def _get_test_indices(self, record):
-
         tick = (record.num_frames - self.new_length + 1) / float(self.num_segments)
-
         offsets = np.array([int(tick / 2.0 + tick * x) for x in range(self.num_segments)])
-
         return offsets + 1
 
     def __getitem__(self, index):
         record = self.video_list[index]
-
         if not self.test_mode:
             segment_indices = self._sample_indices(record) if self.random_shift else self._get_val_indices(record)
         else:
             segment_indices = self._get_test_indices(record)
-
         return self.get(record, segment_indices)
 
     def get(self, record, indices):
-
         images = list()
         for seg_ind in indices:
             p = int(seg_ind)

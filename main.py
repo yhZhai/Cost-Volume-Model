@@ -8,15 +8,16 @@ import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.optim
 from torch.nn.utils import clip_grad_norm
-
+import tensorboardX
 from dataset import TSNDataSet
 from models import TSN
 from transforms import *
 from opts import parser
 
+os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 best_prec1 = 0
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
+writer = tensorboardX.SummaryWriter()
 
 def main():
     global args, best_prec1
@@ -40,8 +41,8 @@ def main():
     input_mean = model.input_mean
     input_std = model.input_std
     train_augmentation = model.get_augmentation()
-
-    # model = torch.nn.DataParallel(model, device_ids=args.gpus).cuda()
+    # if device.type == 'cuda':
+    #     model = torch.nn.DataParallel(model, device_ids=args.gpus).cuda()
 
     if args.resume:
         if os.path.isfile(args.resume):
@@ -49,7 +50,7 @@ def main():
             checkpoint = torch.load(args.resume)
             args.start_epoch = checkpoint['epoch']
             best_prec1 = checkpoint['best_prec1']
-            model.load_state_dict(checkpoint['state_dict'])
+            model.load_state_dict(checkpoint['state_dict'], strict=True if args.modality != 'CV' else False)
             print(("=> loaded checkpoint '{}' (epoch {})"
                    .format(args.evaluate, checkpoint['epoch'])))
         else:
@@ -63,7 +64,7 @@ def main():
     else:
         normalize = IdentityTransform()
 
-    if args.modality == 'RGB':
+    if args.modality in ['RGB', 'CV']:
         data_length = 1
     elif args.modality in ['Flow', 'RGBDiff']:
         data_length = 5
@@ -72,7 +73,7 @@ def main():
         TSNDataSet("", args.train_list, num_segments=args.num_segments,
                    new_length=data_length,
                    modality=args.modality,
-                   image_tmpl="img_{:05d}.jpg" if args.modality in ["RGB", "RGBDiff"] else args.flow_prefix + "{}_{:05d}.jpg",
+                   image_tmpl="img_{:05d}.jpg" if args.modality in ["RGB", "RGBDiff", "CV"] else args.flow_prefix + "{}_{:05d}.jpg",
                    transform=torchvision.transforms.Compose([
                        train_augmentation,
                        Stack(roll=args.arch == 'BNInception'),
@@ -85,7 +86,7 @@ def main():
         TSNDataSet("", args.val_list, num_segments=args.num_segments,
                    new_length=data_length,
                    modality=args.modality,
-                   image_tmpl="img_{:05d}.jpg" if args.modality in ["RGB", "RGBDiff"] else args.flow_prefix + "{}_{:05d}.jpg",
+                   image_tmpl="img_{:05d}.jpg" if args.modality in ["RGB", "RGBDiff", "CV"] else args.flow_prefix + "{}_{:05d}.jpg",
                    random_shift=False,
                    transform=torchvision.transforms.Compose([
                        GroupScale(int(scale_size)),
@@ -106,15 +107,16 @@ def main():
         validate(val_loader, model, criterion, 0)
         return
 
-    for epoch in range(args.start_epoch, args.epochs):
+    for epoch in range(0, args.epochs):
         scheduler.step()
-
+        if epoch < args.start_epoch:
+            continue
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch)
 
         # evaluate on validation set
         if (epoch + 1) % args.eval_freq == 0 or epoch == args.epochs - 1:
-            prec1 = validate(val_loader, model, criterion, (epoch + 1) * len(train_loader))
+            prec1 = validate(val_loader, model, criterion)
 
             # remember best prec@1 and save checkpoint
             is_best = prec1 > best_prec1
@@ -125,6 +127,7 @@ def main():
                 'state_dict': model.state_dict(),
                 'best_prec1': best_prec1,
             }, is_best)
+    writer.close()
 
 
 def train(train_loader, model, criterion, optimizer, epoch):
@@ -136,7 +139,6 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
     # switch to train mode
     model.train()
-
     end = time.time()
     for i, (input, target) in enumerate(train_loader):
         # measure data loading time
@@ -179,9 +181,11 @@ def train(train_loader, model, criterion, optimizer, epoch):
                    'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
                 epoch, i, len(train_loader), batch_time=batch_time,
                 data_time=data_time, loss=losses, top1=top1, top5=top5, lr=optimizer.param_groups[-1]['lr'])))
+    writer.add_scalar('loss', losses.avg, epoch)
+    writer.add_scalar('top1', top1.avg, epoch)
 
 
-def validate(val_loader, model, criterion, iter, logger=None):
+def validate(val_loader, model, criterion):
     batch_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()

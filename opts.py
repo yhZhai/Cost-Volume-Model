@@ -2,7 +2,7 @@ import argparse
 
 parser = argparse.ArgumentParser(description="PyTorch implementation of Temporal Segment Networks")
 parser.add_argument('dataset', type=str, choices=['ucf101', 'hmdb51', 'kinetics'])
-parser.add_argument('modality', type=str, choices=['RGB', 'Flow', 'RGBDiff'])
+parser.add_argument('modality', type=str, choices=['RGB', 'Flow', 'RGBDiff', 'CV'])  # CV refers to Cost Volume
 parser.add_argument('train_list', type=str)
 parser.add_argument('val_list', type=str)
 
@@ -22,7 +22,7 @@ parser.add_argument('-b', '--batch-size', default=16, type=int,
                     metavar='N', help='mini-batch size (default: 256)')
 parser.add_argument('--lr', '--learning-rate', default=0.001, type=float,
                     metavar='LR', help='initial learning rate')
-parser.add_argument('--lr_steps', default=[20, 40], type=float, nargs="+",
+parser.add_argument('--lr_steps', default=[30, 60], type=float, nargs="+",
                     metavar='LRSteps', help='epochs to decay learning rate by 10')
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
                     help='momentum')
@@ -47,4 +47,4 @@ parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
 parser.add_argument('--gpus', nargs='+', type=int, default=None)
-parser.add_argument('--flow_prefix', default="", type=str)
+parser.add_argument('--flow_prefix', default="flow_", type=str)
