@@ -22,15 +22,15 @@ class ConvModule(nn.Module):
 class PreModel(nn.Module):
     def __init__(self):
         super(PreModel, self).__init__()
-        self.module1 = ConvModule(3, 8, 3, 1, 1)
+        self.module1 = ConvModule(3, 64, 3, 1, 1)
         self.avgpool = nn.AvgPool2d(3, stride=1, padding=1)
-        self.module2 = ConvModule(8, 16, 3, 1, 1)
-        self.module3 = ConvModule(16, 64, 3, 1, 1)
+        # self.module2 = ConvModule(8, 16, 3, 1, 1)
+        # self.module3 = ConvModule(16, 64, 3, 1, 1)
 
     def forward(self, input):
         input = self.avgpool(self.module1(input))
-        input = self.avgpool(self.module2(input))
-        input = self.avgpool(self.module3(input))
+        # input = self.avgpool(self.module2(input))
+        # input = self.avgpool(self.module3(input))
 
         return input
 
@@ -39,7 +39,7 @@ class LateModel(nn.Module):
     def __init__(self, num_classes=1000):
         super(LateModel, self).__init__()
         inplace = True
-        self.conv1_7x7_s2 = nn.Conv2d(2, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3))
+        self.conv1_7x7_s2 = nn.Conv2d(14, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3))
         self.conv1_7x7_s2_bn = nn.BatchNorm2d(64, affine=True)
         self.conv1_relu_7x7 = nn.ReLU(inplace)
         self.pool1_3x3_s2 = nn.MaxPool2d((3, 3), stride=(2, 2), dilation=(1, 1), ceil_mode=True)

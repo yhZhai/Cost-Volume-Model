@@ -23,3 +23,26 @@ class CostVolume(nn.Module):
                 output[:, :, :, dh, dw] = cosine_similarity(img1, img2[:, :, dh: dh + h, dw: dw + w], dim=1)
 
         return output
+
+
+class DisplacementMap(nn.Module):
+    def __init__(self, tau=1):
+        super(DisplacementMap, self).__init__()
+        self.tau = tau
+        self.softmax = nn.Softmax(dim=3)
+
+    def forward(self, cost_volume):
+        b = cost_volume.shape[0]
+        cost_volume = cost_volume / self.tau
+        cost_volume = torch.exp(cost_volume)
+        rou_i = cost_volume.sum(dim=3)
+        rou_i = self.softmax(rou_i)
+        rou_j = cost_volume.sum(dim=4)
+        rou_j = self.softmax(rou_j)
+
+        arange = torch.arange(-2, 3).to(device).float().repeat((b,) + cost_volume.size()[1: 3] + (1,))
+        v_x = rou_i * arange
+        v_x = torch.sum(v_x, dim=3).unsqueeze(1)
+        v_y = rou_j * arange
+        v_y = torch.sum(v_y, dim=3).unsqueeze(1)
+        return torch.cat([v_x, v_y], dim=1)

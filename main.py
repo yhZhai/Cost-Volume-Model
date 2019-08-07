@@ -33,8 +33,15 @@ def main():
     else:
         raise ValueError('Unknown dataset ' + args.dataset)
 
+    if args.modality == 'RGB':
+        data_length = 1
+    elif args.modality in ['Flow', 'RGBDiff']:
+        data_length = 5
+    else:
+        data_length = 7  # generate 7 displacement map, using 8 RGB images
+
     model = TSN(num_class, args.num_segments, args.modality, base_model=args.arch,
-                consensus_type=args.consensus_type, dropout=args.dropout)
+                consensus_type=args.consensus_type, dropout=args.dropout, new_length=data_length)
     model = model.to(device)
 
     crop_size = model.crop_size
@@ -42,8 +49,8 @@ def main():
     input_mean = model.input_mean
     input_std = model.input_std
     train_augmentation = model.get_augmentation()
-    if device.type == 'cuda':
-        model = torch.nn.DataParallel(model, device_ids=args.gpus).cuda()
+    # if device.type == 'cuda':
+    #     model = torch.nn.DataParallel(model, device_ids=args.gpus).cuda()
 
     if args.resume:
         if os.path.isfile(args.resume):
@@ -64,11 +71,6 @@ def main():
         normalize = GroupNormalize(input_mean, input_std)
     else:
         normalize = IdentityTransform()
-
-    if args.modality in ['RGB', 'CV']:
-        data_length = 1
-    elif args.modality in ['Flow', 'RGBDiff']:
-        data_length = 5
 
     train_loader = torch.utils.data.DataLoader(
         TSNDataSet("", args.train_list, num_segments=args.num_segments,

@@ -1,5 +1,5 @@
 from torch import nn
-from cost_volume import CostVolume
+from cost_volume import CostVolume, DisplacementMap
 from ops.basic_ops import ConsensusModule, Identity
 from transforms import *
 import bninception
@@ -26,7 +26,12 @@ class TSN(nn.Module):
             raise ValueError("Only avg consensus can be used after Softmax")
 
         if new_length is None:
-            self.new_length = 1 if modality in ["RGB", "CV"] else 5
+            if modality == 'RGB':
+                self.new_length = 1
+            elif modality == 'CV':
+                self.new_length = 7
+            else:
+                self.new_length = 5
         else:
             self.new_length = new_length
 
@@ -60,8 +65,8 @@ TSN Configurations:
         self.consensus = ConsensusModule(consensus_type)
         if self.modality == 'CV':
             self.prev_cv_model = cost_volume_model.PreModel()
+            self.displacement_map = DisplacementMap(1)
             self.late_cv_model = cost_volume_model.LateModel()
-            self.v_softmax = nn.Softmax(dim=3)
 
         if not self.before_softmax:
             self.softmax = nn.Softmax()
@@ -123,78 +128,9 @@ TSN Configurations:
         else:
             raise ValueError('Unknown base model: {}'.format(base_model))
 
-    # def train(self, mode=True):
-    #     """
-    #     Override the default train() to freeze the BN parameters
-    #     :return:
-    #     """
-    #     super(TSN, self).train(mode)
-    #     count = 0
-    #     if self._enable_pbn:
-    #         print("Freezing BatchNorm2D except the first one.")
-    #         for m in self.base_model.modules():
-    #             if isinstance(m, nn.BatchNorm2d):
-    #                 count += 1
-    #                 if count >= (2 if self._enable_pbn else 1):
-    #                     m.eval()
-    #
-    #                     # shutdown update in frozen mode
-    #                     m.weight.requires_grad = False
-    #                     m.bias.requires_grad = False
-
-    # def get_optim_policies(self):
-    #     first_conv_weight = []
-    #     first_conv_bias = []
-    #     normal_weight = []
-    #     normal_bias = []
-    #     bn = []
-    #
-    #     conv_cnt = 0
-    #     bn_cnt = 0
-    #     for m in self.modules():
-    #         if isinstance(m, torch.nn.Conv2d) or isinstance(m, torch.nn.Conv1d):
-    #             ps = list(m.parameters())
-    #             conv_cnt += 1
-    #             if conv_cnt == 1:
-    #                 first_conv_weight.append(ps[0])
-    #                 if len(ps) == 2:
-    #                     first_conv_bias.append(ps[1])
-    #             else:
-    #                 normal_weight.append(ps[0])
-    #                 if len(ps) == 2:
-    #                     normal_bias.append(ps[1])
-    #         elif isinstance(m, torch.nn.Linear):
-    #             ps = list(m.parameters())
-    #             normal_weight.append(ps[0])
-    #             if len(ps) == 2:
-    #                 normal_bias.append(ps[1])
-    #
-    #         elif isinstance(m, torch.nn.BatchNorm1d):
-    #             bn.extend(list(m.parameters()))
-    #         elif isinstance(m, torch.nn.BatchNorm2d):
-    #             bn_cnt += 1
-    #             # later BN's are frozen
-    #             if not self._enable_pbn or bn_cnt == 1:
-    #                 bn.extend(list(m.parameters()))
-    #         elif len(m._modules) == 0:
-    #             if len(list(m.parameters())) > 0:
-    #                 raise ValueError("New atomic module type: {}. Need to give it a learning policy".format(type(m)))
-    #
-    #     return [
-    #         {'params': first_conv_weight, 'lr_mult': 5 if self.modality == 'Flow' else 1, 'decay_mult': 1,
-    #          'name': "first_conv_weight"},
-    #         {'params': first_conv_bias, 'lr_mult': 10 if self.modality == 'Flow' else 2, 'decay_mult': 0,
-    #          'name': "first_conv_bias"},
-    #         {'params': normal_weight, 'lr_mult': 1, 'decay_mult': 1,
-    #          'name': "normal_weight"},
-    #         {'params': normal_bias, 'lr_mult': 2, 'decay_mult': 0,
-    #          'name': "normal_bias"},
-    #         {'params': bn, 'lr_mult': 1, 'decay_mult': 0,
-    #          'name': "BN scale/shift"},
-    #     ]
-
     def forward(self, input):
         b, _, h, w = input.shape
+        # sample_len is the number of channels of a segment
         if self.modality == 'RGB':
             sample_len = 3 * self.new_length
         elif self.modality == 'CV':
@@ -210,25 +146,14 @@ TSN Configurations:
             input = input.view((-1, 3) + input.size()[-2:])
             input = self.prev_cv_model(input)
             input = input.view((b, -1) + input.size()[-2:])
-            c = input.shape[1] // 6
-            v = []
-            tau = 1
-            arange = torch.arange(-2, 3).to(device).float().repeat((b,) + input.size()[2:] + (1,))
-
+            c = input.shape[1] // ((self.new_length + 1) * self.num_segments)
+            displacement_map = []
             for i in range(self.num_segments):
-                cost_volume = self.cost_volume(input[:, i * c: i * c + c // 2, :, :], input[:, i * c + c // 2: (i + 1) * c, :, :])
-                cost_volume = cost_volume / tau
-                cost_volume = torch.exp(cost_volume)
-                rou_i = cost_volume.sum(dim=3)
-                rou_i = self.v_softmax(rou_i)
-                rou_j = cost_volume.sum(dim=4)
-                rou_j = self.v_softmax(rou_j)
-                v_x = rou_i * arange
-                v_x = torch.sum(v_x, dim=3).unsqueeze(1)
-                v_y = rou_j * arange
-                v_y = torch.sum(v_y, dim=3).unsqueeze(1)
-                v.append(torch.cat([v_x, v_y], dim=1))
-            input = torch.cat(v, dim=1)
+                segment = input[:, i * (self.new_length + 1) * c: (i + 1) * (self.new_length + 1) * c, :, :]
+                for j in range(self.new_length):
+                    cost_volume = self.cost_volume(segment[:, j * c: (j + 1) * c, :, :], segment[:, (j + 1) * c: (j + 2) * c, :, :])
+                    displacement_map.append(self.displacement_map(cost_volume))
+            input = torch.cat(displacement_map, dim=1)
             base_out = self.late_cv_model(input.view((-1, sample_len) + input.size()[-2:]))
         else:
             base_out = self.base_model(input.view((-1, sample_len) + input.size()[-2:]))
