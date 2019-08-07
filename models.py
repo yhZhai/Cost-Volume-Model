@@ -45,9 +45,17 @@ TSN Configurations:
     dropout_ratio:      {}
         """.format(base_model, self.modality, self.num_segments, self.new_length, consensus_type, self.dropout)))
 
-        self._prepare_base_model(base_model)
 
-        feature_dim = self._prepare_tsn(num_class)
+
+        if self.modality == 'CV':
+            self.input_size = 224
+            self.input_mean = [104, 117, 128]
+            self.input_std = [1]
+            self._prepare_tsn(num_class, is_cv=True)
+        else:
+            self._prepare_base_model(base_model)
+            self._prepare_tsn(num_class, is_cv=False)
+
 
         if self.modality == 'Flow':
             print("Converting the ImageNet model to a flow init model")
@@ -58,39 +66,41 @@ TSN Configurations:
             self.base_model = self._construct_diff_model(self.base_model)
             print("Done. RGBDiff model ready.")
         elif self.modality == 'CV':
-            print("Converting the ImageNet model to CV init model")
-            self.base_model = self._construct_cv_model(self.base_model)
-            print("Done. CV model ready.")
-
-        self.consensus = ConsensusModule(consensus_type)
-        if self.modality == 'CV':
+            # print("Converting the ImageNet model to CV init model")
+            # self._construct_cv_model()
             self.prev_cv_model = cost_volume_model.PreModel()
             self.displacement_map = DisplacementMap(1)
             self.late_cv_model = cost_volume_model.LateModel()
+            print("CV model ready.")
+
+        self.consensus = ConsensusModule(consensus_type)
 
         if not self.before_softmax:
             self.softmax = nn.Softmax()
 
-    def _prepare_tsn(self, num_class):
-        feature_dim = getattr(self.base_model, self.base_model.last_layer_name).in_features
-        if self.dropout == 0:
-            setattr(self.base_model, self.base_model.last_layer_name, nn.Linear(feature_dim, num_class))
-            self.new_fc = None
-        else:
-            setattr(self.base_model, self.base_model.last_layer_name, nn.Dropout(p=self.dropout))
-            self.new_fc = nn.Linear(feature_dim, num_class)
+    def _prepare_tsn(self, num_class, is_cv):
+        if not is_cv:
+            feature_dim = getattr(self.base_model, self.base_model.last_layer_name).in_features
+            if self.dropout == 0:
+                setattr(self.base_model, self.base_model.last_layer_name, nn.Linear(feature_dim, num_class))
+                self.new_fc = None
+            else:
+                setattr(self.base_model, self.base_model.last_layer_name, nn.Dropout(p=self.dropout))
+                self.new_fc = nn.Linear(feature_dim, num_class)
 
-        std = 0.001
-        if self.new_fc is None:
-            normal_(getattr(self.base_model, self.base_model.last_layer_name).weight, 0, std)
-            constant_(getattr(self.base_model, self.base_model.last_layer_name).bias, 0)
+            std = 0.001
+            if self.new_fc is None:
+                normal_(getattr(self.base_model, self.base_model.last_layer_name).weight, 0, std)
+                constant_(getattr(self.base_model, self.base_model.last_layer_name).bias, 0)
+            else:
+                normal_(self.new_fc.weight, 0, std)
+                constant_(self.new_fc.bias, 0)
+            return feature_dim
         else:
-            normal_(self.new_fc.weight, 0, std)
-            constant_(self.new_fc.bias, 0)
-        return feature_dim
+            self.new_fc = nn.Sequential(nn.Dropout(p=self.dropout), nn.Linear(1024, num_class))
+            return 1024
 
     def _prepare_base_model(self, base_model):
-
         if 'resnet' in base_model or 'vgg' in base_model:
             self.base_model = getattr(torchvision.models, base_model)(True)
             self.base_model.last_layer_name = 'fc'
@@ -105,8 +115,6 @@ TSN Configurations:
                 self.input_mean = [0.485, 0.456, 0.406] + [0] * 3 * self.new_length
                 self.input_std = self.input_std + [np.mean(self.input_std) * 2] * 3 * self.new_length
         elif base_model == 'BNInception':
-            # import tf_model_zoo
-            # self.base_model = getattr(tf_model_zoo, base_model)()
             self.base_model = bninception.bninception(101, pretrained=None)
             self.base_model.last_layer_name = 'fc'
             self.input_size = 224
@@ -213,33 +221,6 @@ TSN Configurations:
         setattr(container, layer_name, new_conv)
         return base_model
 
-    def _construct_cv_model(self, base_model):
-        # modify the convolution layers
-        # Torch models are usually defined in a hierarchical way.
-        # nn.modules.children() return all sub modules in a DFS manner
-        modules = list(self.base_model.modules())
-        first_conv_idx = list(filter(lambda x: isinstance(modules[x], nn.Conv2d), list(range(len(modules)))))[0]
-        conv_layer = modules[first_conv_idx]
-        container = modules[first_conv_idx - 1]
-
-        # modify parameters, assume the first blob contains the convolution kernels
-        params = [x.clone() for x in conv_layer.parameters()]
-        kernel_size = params[0].size()
-        new_kernel_size = kernel_size[:1] + (2 * self.new_length,) + kernel_size[2:]
-        new_kernels = params[0].data.mean(dim=1, keepdim=True).expand(new_kernel_size).contiguous()
-
-        new_conv = nn.Conv2d(2 * self.new_length, conv_layer.out_channels,
-                             conv_layer.kernel_size, conv_layer.stride, conv_layer.padding,
-                             bias=True if len(params) == 2 else False)
-        new_conv.weight.data = new_kernels
-        if len(params) == 2:
-            new_conv.bias.data = params[1].data  # add bias if neccessary
-        layer_name = list(container.state_dict().keys())[0][:-7]  # remove .weight suffix to get the layer name
-
-        # replace the first convlution layer
-        setattr(container, layer_name, new_conv)
-        return base_model
-
     def _construct_diff_model(self, base_model, keep_rgb=False):
         # modify the convolution layers
         # Torch models are usually defined in a hierarchical way.
@@ -297,8 +278,7 @@ TSN Configurations:
 
         def load(module, prefix=''):
             local_metadata = {} if metadata is None else metadata.get(prefix[:-1], {})
-            module._load_from_state_dict(
-                state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
+            module._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
             for name, child in module._modules.items():
                 if child is not None:
                     load(child, prefix + name + '.')
