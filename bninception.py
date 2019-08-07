@@ -6,40 +6,32 @@ import torch.utils.model_zoo as model_zoo
 import os
 import sys
 
+__all__ = ['BNInception', 'bninception']
 
-class ConvModule(nn.Module):
-    def __init__(self, in_channel, out_channel, kernel, stride=1, padding=0):
-        super(ConvModule, self).__init__()
-        self.conv = nn.Conv2d(in_channel, out_channel, kernel, stride=stride, padding=padding)
-        self.bn = nn.BatchNorm2d(out_channel)
-        self.relu = nn.ReLU()
-
-    def forward(self, input):
-        input = self.relu(self.bn(self.conv(input)))
-        return input
-
-
-class PreModel(nn.Module):
-    def __init__(self):
-        super(PreModel, self).__init__()
-        self.module1 = ConvModule(3, 8, 3, 1, 1)
-        self.avgpool = nn.AvgPool2d(3, stride=1, padding=1)
-        self.module2 = ConvModule(8, 16, 3, 1, 1)
-        self.module3 = ConvModule(16, 64, 3, 1, 1)
-
-    def forward(self, input):
-        input = self.avgpool(self.module1(input))
-        input = self.avgpool(self.module2(input))
-        input = self.avgpool(self.module3(input))
-
-        return input
+pretrained_settings = {
+    'bninception': {
+        'imagenet': {
+            # Was ported using python2 (may trigger warning)
+            # 'url': 'http://data.lip6.fr/cadene/pretrainedmodels/bn_inception-52deb4733.pth',
+            'url': 'https://yjxiong.blob.core.windows.net/models/bn_inception-9f5701afb96c8044.pth',
+            # 'url': 'http://yjxiong.me/others/bn_inception-9f5701afb96c8044.pth',
+            'input_space': 'BGR',
+            'input_size': [3, 224, 224],
+            'input_range': [0, 255],
+            'mean': [104, 117, 128],
+            'std': [1, 1, 1],
+            'num_classes': 1000
+        }
+    }
+}
 
 
-class LateModel(nn.Module):
+class BNInception(nn.Module):
+
     def __init__(self, num_classes=1000):
-        super(LateModel, self).__init__()
+        super(BNInception, self).__init__()
         inplace = True
-        self.conv1_7x7_s2 = nn.Conv2d(2, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3))
+        self.conv1_7x7_s2 = nn.Conv2d(3, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3))
         self.conv1_7x7_s2_bn = nn.BatchNorm2d(64, affine=True)
         self.conv1_relu_7x7 = nn.ReLU(inplace)
         self.pool1_3x3_s2 = nn.MaxPool2d((3, 3), stride=(2, 2), dilation=(1, 1), ceil_mode=True)
@@ -259,14 +251,6 @@ class LateModel(nn.Module):
         self.inception_5b_pool_proj_bn = nn.BatchNorm2d(128, affine=True)
         self.inception_5b_relu_pool_proj = nn.ReLU(inplace)
         self.fc = nn.Linear(1024, num_classes)
-        state_dict = torch.utils.model_zoo.load_url('https://yjxiong.blob.core.windows.net/models/bn_inception-9f5701afb96c8044.pth')
-        state_dict.pop('fc.weight')
-        state_dict.pop('fc.bias')
-        state_dict.pop('conv1_7x7_s2.weight')
-        for key, weight in state_dict.items():
-            if 'bn' in key:
-                state_dict[key] = weight.squeeze(0)
-        self.load_state_dict(state_dict, strict=False)
 
     def features(self, input):
         conv1_7x7_s2_out = self.conv1_7x7_s2(input)
@@ -522,7 +506,7 @@ class LateModel(nn.Module):
         adaptiveAvgPoolWidth = features.shape[2]
         x = F.avg_pool2d(features, kernel_size=adaptiveAvgPoolWidth)
         x = x.view(x.size(0), -1)
-        # x = self.fc(x)
+        x = self.fc(x)
         return x
 
     def forward(self, input):
@@ -531,3 +515,20 @@ class LateModel(nn.Module):
         return x
 
 
+def bninception(num_classes=1000, pretrained='imagenet'):
+    r"""BNInception model architecture from <https://arxiv.org/pdf/1502.03167.pdf>`_ paper.
+    """
+    model = BNInception(num_classes=num_classes)
+    if pretrained is not None:
+        settings = pretrained_settings['bninception'][pretrained]
+        model.load_state_dict(model_zoo.load_url(settings['url']), strict=False)
+        model.input_space = settings['input_space']
+        model.input_size = settings['input_size']
+        model.input_range = settings['input_range']
+        model.mean = settings['mean']
+        model.std = settings['std']
+    return model
+
+
+if __name__ == '__main__':
+    model = bninception()

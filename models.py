@@ -2,8 +2,9 @@ from torch import nn
 from cost_volume import CostVolume
 from ops.basic_ops import ConsensusModule, Identity
 from transforms import *
-# import pretrainedmodels
+import bninception
 from torch.nn.init import normal_, constant_
+import cost_volume_model
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -57,15 +58,11 @@ TSN Configurations:
             print("Done. CV model ready.")
 
         self.consensus = ConsensusModule(consensus_type)
-        self.prev_cv_model = nn.Sequential(nn.Conv2d(3, 8, 3, stride=1, padding=1),
-                                           nn.BatchNorm2d(8),
-                                           nn.ReLU(),
-                                           nn.MaxPool2d(3, stride=1, padding=1),
-                                           nn.Conv2d(8, 16, 3, stride=1, padding=1),
-                                           nn.BatchNorm2d(16),
-                                           nn.ReLU(),
-                                           nn.MaxPool2d(3, stride=1, padding=1))
-        self.v_softmax = nn.Softmax(dim=3)
+        if self.modality == 'CV':
+            self.prev_cv_model = cost_volume_model.PreModel()
+            self.late_cv_model = cost_volume_model.LateModel()
+            self.v_softmax = nn.Softmax(dim=3)
+
         if not self.before_softmax:
             self.softmax = nn.Softmax()
 
@@ -103,9 +100,9 @@ TSN Configurations:
                 self.input_mean = [0.485, 0.456, 0.406] + [0] * 3 * self.new_length
                 self.input_std = self.input_std + [np.mean(self.input_std) * 2] * 3 * self.new_length
         elif base_model == 'BNInception':
-            import tf_model_zoo
-            self.base_model = getattr(tf_model_zoo, base_model)()
-            # self.base_model = pretrainedmodels.bninception(101, pretrained=None)
+            # import tf_model_zoo
+            # self.base_model = getattr(tf_model_zoo, base_model)()
+            self.base_model = bninception.bninception(101, pretrained=None)
             self.base_model.last_layer_name = 'fc'
             self.input_size = 224
             self.input_mean = [104, 117, 128]
@@ -232,8 +229,10 @@ TSN Configurations:
                 v_y = torch.sum(v_y, dim=3).unsqueeze(1)
                 v.append(torch.cat([v_x, v_y], dim=1))
             input = torch.cat(v, dim=1)
+            base_out = self.late_cv_model(input.view((-1, sample_len) + input.size()[-2:]))
+        else:
+            base_out = self.base_model(input.view((-1, sample_len) + input.size()[-2:]))
 
-        base_out = self.base_model(input.view((-1, sample_len) + input.size()[-2:]))
 
         if self.dropout > 0:
             base_out = self.new_fc(base_out)
@@ -405,7 +404,7 @@ TSN Configurations:
         return self.input_size * 256 // 224
 
     def get_augmentation(self):
-        if self.modality in ['RGB', 'CV']:
+        if self.modality == 'RGB':
             return torchvision.transforms.Compose([GroupMultiScaleCrop(self.input_size, [1, .875, .75, .66]),
                                                    GroupRandomHorizontalFlip(is_flow=False)])
         elif self.modality == 'Flow':
@@ -414,3 +413,7 @@ TSN Configurations:
         elif self.modality == 'RGBDiff':
             return torchvision.transforms.Compose([GroupMultiScaleCrop(self.input_size, [1, .875, .75]),
                                                    GroupRandomHorizontalFlip(is_flow=False)])
+        elif self.modality == 'CV':
+            return torchvision.transforms.Compose([GroupMultiScaleCrop(self.input_size, [1, .875, .75]),
+                                                   GroupRandomHorizontalFlip(is_flow=False)])
+
