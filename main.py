@@ -14,7 +14,6 @@ from models import TSN
 from transforms import *
 from opts import parser
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 best_prec1 = 0
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 writer = tensorboardX.SummaryWriter()
@@ -38,7 +37,7 @@ def main():
     elif args.modality in ['Flow', 'RGBDiff']:
         data_length = 5
     else:
-        data_length = 7  # generate 7 displacement map, using 8 RGB images
+        data_length = 5  # generate 5 displacement map, using 6 RGB images
 
     model = TSN(num_class, args.num_segments, args.modality, base_model=args.arch,
                 consensus_type=args.consensus_type, dropout=args.dropout, new_length=data_length)
@@ -49,8 +48,20 @@ def main():
     input_mean = model.input_mean
     input_std = model.input_std
     train_augmentation = model.get_augmentation()
-    # if device.type == 'cuda':
-    #     model = torch.nn.DataParallel(model, device_ids=args.gpus).cuda()
+    if device.type == 'cuda':
+        model = torch.nn.DataParallel(model, device_ids=args.gpus).cuda()
+
+    a = torch.load('ucf101_cv_checkpoint.pth.tar')['state_dict']
+    # a.pop('module.prev_cv_model.module1.conv.weight')
+    # a.pop('module.prev_cv_model.module1.conv.bias')
+    # a.pop('module.prev_cv_model.module1.bn.weight')
+    # a.pop('module.prev_cv_model.module1.bn.bias')
+    # a.pop('module.prev_cv_model.module1.bn.running_mean')
+    # a.pop('module.prev_cv_model.module1.bn.running_var')
+    # a.pop('module.late_cv_model.conv1_7x7_s2.weight')
+    weight = a['module.late_cv_model.conv1_7x7_s2.weight'][:, :2, :, :].repeat((1, 5, 1, 1))
+    a['module.late_cv_model.conv1_7x7_s2.weight'] = weight
+    model.load_state_dict(a)
 
     if args.resume:
         if os.path.isfile(args.resume):
@@ -59,8 +70,7 @@ def main():
             args.start_epoch = checkpoint['epoch']
             best_prec1 = checkpoint['best_prec1']
             model.load_state_dict(checkpoint['state_dict'], strict=True)
-            print(("=> loaded checkpoint '{}' (epoch {})"
-                   .format(args.evaluate, checkpoint['epoch'])))
+            print(("=> loaded checkpoint '{}' (epoch {})".format(args.evaluate, checkpoint['epoch'])))
         else:
             print(("=> no checkpoint found at '{}'".format(args.resume)))
 
@@ -112,8 +122,8 @@ def main():
 
     for epoch in range(0, args.epochs):
         scheduler.step()
-        if epoch < args.start_epoch:
-            continue
+        # if epoch < args.start_epoch:
+        #     continue
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch)
 
@@ -184,6 +194,8 @@ def train(train_loader, model, criterion, optimizer, epoch):
                    'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
                 epoch, i, len(train_loader), batch_time=batch_time,
                 data_time=data_time, loss=losses, top1=top1, top5=top5, lr=optimizer.param_groups[-1]['lr'])))
+            writer.add_scalar('step: loss', losses.avg, epoch * len(train_loader) + i)
+            writer.add_scalar('step: top1', top1.avg, epoch * len(train_loader) + i)
     writer.add_scalar('train: loss', losses.avg, epoch)
     writer.add_scalar('train: top1', top1.avg, epoch)
 

@@ -29,7 +29,7 @@ class TSN(nn.Module):
             if modality == 'RGB':
                 self.new_length = 1
             elif modality == 'CV':
-                self.new_length = 7
+                self.new_length = 5
             else:
                 self.new_length = 5
         else:
@@ -45,8 +45,6 @@ TSN Configurations:
     dropout_ratio:      {}
         """.format(base_model, self.modality, self.num_segments, self.new_length, consensus_type, self.dropout)))
 
-
-
         if self.modality == 'CV':
             self.input_size = 224
             self.input_mean = [104, 117, 128]
@@ -55,7 +53,6 @@ TSN Configurations:
         else:
             self._prepare_base_model(base_model)
             self._prepare_tsn(num_class, is_cv=False)
-
 
         if self.modality == 'Flow':
             print("Converting the ImageNet model to a flow init model")
@@ -69,7 +66,7 @@ TSN Configurations:
             # print("Converting the ImageNet model to CV init model")
             # self._construct_cv_model()
             self.prev_cv_model = cost_volume_model.PreModel()
-            self.displacement_map = DisplacementMap(1)
+            self.displacement_map = DisplacementMap(2, 2, 0)
             self.late_cv_model = cost_volume_model.LateModel()
             print("CV model ready.")
 
@@ -153,19 +150,19 @@ TSN Configurations:
         if self.modality == 'CV':
             input = input.view((-1, 3) + input.size()[-2:])
             input = self.prev_cv_model(input)
-            input = input.view((b, -1) + input.size()[-2:])
-            c = input.shape[1] // ((self.new_length + 1) * self.num_segments)
-            displacement_map = []
-            for i in range(self.num_segments):
-                segment = input[:, i * (self.new_length + 1) * c: (i + 1) * (self.new_length + 1) * c, :, :]
-                for j in range(self.new_length):
-                    cost_volume = self.cost_volume(segment[:, j * c: (j + 1) * c, :, :], segment[:, (j + 1) * c: (j + 2) * c, :, :])
-                    displacement_map.append(self.displacement_map(cost_volume))
-            input = torch.cat(displacement_map, dim=1)
+            input = nn.functional.interpolate(input, size=(224, 224), mode='bilinear')
+            input = input.view((b * self.num_segments, -1) + input.size()[-2:])
+            c = 64
+            img1 = input[:, : input.shape[1] - c, :, :].contiguous()
+            img2 = input[:, c:, :, :].contiguous()
+            img1 = img1.view((-1, c) + input.size()[-2:])
+            img2 = img2.view((-1, c) + input.size()[-2:])
+            cost_volume = self.cost_volume(img1, img2)
+            displacement_map = self.displacement_map(cost_volume)
+            input = displacement_map.view((b, -1) + input.size()[-2:])
             base_out = self.late_cv_model(input.view((-1, sample_len) + input.size()[-2:]))
         else:
             base_out = self.base_model(input.view((-1, sample_len) + input.size()[-2:]))
-
 
         if self.dropout > 0:
             base_out = self.new_fc(base_out)
@@ -253,52 +250,52 @@ TSN Configurations:
         setattr(container, layer_name, new_conv)
         return base_model
 
-    def load_state_dict(self, state_dict, strict=True):
-        r"""Copies parameters and buffers from :attr:`state_dict` into
-        this module and its descendants. If :attr:`strict` is ``True``, then
-        the keys of :attr:`state_dict` must exactly match the keys returned
-        by this module's :meth:`~torch.nn.Module.state_dict` function.
-
-        Arguments:
-            state_dict (dict): a dict containing parameters and
-                persistent buffers.
-            strict (bool, optional): whether to strictly enforce that the keys
-                in :attr:`state_dict` match the keys returned by this module's
-                :meth:`~torch.nn.Module.state_dict` function. Default: ``True``
-        """
-        missing_keys = []
-        unexpected_keys = []
-        error_msgs = []
-
-        # copy state_dict so _load_from_state_dict can modify it
-        metadata = getattr(state_dict, '_metadata', None)
-        state_dict = state_dict.copy()
-        if metadata is not None:
-            state_dict._metadata = metadata
-
-        def load(module, prefix=''):
-            local_metadata = {} if metadata is None else metadata.get(prefix[:-1], {})
-            module._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
-            for name, child in module._modules.items():
-                if child is not None:
-                    load(child, prefix + name + '.')
-
-        load(self)
-
-        if strict:
-            error_msg = ''
-            if len(unexpected_keys) > 0:
-                error_msgs.insert(
-                    0, 'Unexpected key(s) in state_dict: {}. '.format(
-                        ', '.join('"{}"'.format(k) for k in unexpected_keys)))
-            if len(missing_keys) > 0:
-                error_msgs.insert(
-                    0, 'Missing key(s) in state_dict: {}. '.format(
-                        ', '.join('"{}"'.format(k) for k in missing_keys)))
-
-        if len(error_msgs) > 0:
-            raise RuntimeError('Error(s) in loading state_dict for {}:\n\t{}'.format(
-                               self.__class__.__name__, "\n\t".join(error_msgs)))
+    # def load_state_dict(self, state_dict, strict=True):
+    #     r"""Copies parameters and buffers from :attr:`state_dict` into
+    #     this module and its descendants. If :attr:`strict` is ``True``, then
+    #     the keys of :attr:`state_dict` must exactly match the keys returned
+    #     by this module's :meth:`~torch.nn.Module.state_dict` function.
+    #
+    #     Arguments:
+    #         state_dict (dict): a dict containing parameters and
+    #             persistent buffers.
+    #         strict (bool, optional): whether to strictly enforce that the keys
+    #             in :attr:`state_dict` match the keys returned by this module's
+    #             :meth:`~torch.nn.Module.state_dict` function. Default: ``True``
+    #     """
+    #     missing_keys = []
+    #     unexpected_keys = []
+    #     error_msgs = []
+    #
+    #     # copy state_dict so _load_from_state_dict can modify it
+    #     metadata = getattr(state_dict, '_metadata', None)
+    #     state_dict = state_dict.copy()
+    #     if metadata is not None:
+    #         state_dict._metadata = metadata
+    #
+    #     def load(module, prefix=''):
+    #         local_metadata = {} if metadata is None else metadata.get(prefix[:-1], {})
+    #         module._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
+    #         for name, child in module._modules.items():
+    #             if child is not None:
+    #                 load(child, prefix + name + '.')
+    #
+    #     load(self)
+    #
+    #     if strict:
+    #         error_msg = ''
+    #         if len(unexpected_keys) > 0:
+    #             error_msgs.insert(
+    #                 0, 'Unexpected key(s) in state_dict: {}. '.format(
+    #                     ', '.join('"{}"'.format(k) for k in unexpected_keys)))
+    #         if len(missing_keys) > 0:
+    #             error_msgs.insert(
+    #                 0, 'Missing key(s) in state_dict: {}. '.format(
+    #                     ', '.join('"{}"'.format(k) for k in missing_keys)))
+    #
+    #     if len(error_msgs) > 0:
+    #         raise RuntimeError('Error(s) in loading state_dict for {}:\n\t{}'.format(
+    #             self.__class__.__name__, "\n\t".join(error_msgs)))
 
     @property
     def crop_size(self):
@@ -321,4 +318,3 @@ TSN Configurations:
         elif self.modality == 'CV':
             return torchvision.transforms.Compose([GroupMultiScaleCrop(self.input_size, [1, .875, .75]),
                                                    GroupRandomHorizontalFlip(is_flow=False)])
-
