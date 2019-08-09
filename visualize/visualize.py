@@ -7,20 +7,21 @@ import numpy as np
 from PIL import Image
 import torchvision
 import os
+from torch.nn.init import normal_
 import io
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 def main():
-    img1 = Image.open('ffffake1.png')
-    img2 = Image.open('ffffake2.png')
+    img1 = Image.open('first.png')
+    img2 = Image.open('second.png')
 
     to_tensor = torchvision.transforms.ToTensor()
     img1 = to_tensor(img1).to(device)
     img2 = to_tensor(img2).to(device)
-    dp_f = get_displacement_map(img1, img2, delta_w=4, delta_h=4, tau=0)
-    dp_b = get_displacement_map(img2, img1, delta_w=4, delta_h=4, tau=0)
+    dp_f = get_displacement_map(img1, img2, delta_w=4, delta_h=4, tau=1)
+    dp_b = get_displacement_map(img2, img1, delta_w=4, delta_h=4, tau=1)
     occlusion_model = Occlusion()
     occlusion, dp_rev = occlusion_model(dp_f.unsqueeze(0), dp_b.unsqueeze(0))
 
@@ -57,10 +58,17 @@ def get_displacement_map(img1, img2, delta_w=10, delta_h=10, tau=0.5):
     img2 = img2.unsqueeze(0)
     shape = img1.shape[2:]
     pre_model = PreModel().to(device)
-    cost_volume = CostVolume(delta_w=delta_w, delta_h=delta_h).to(device)
+    t1 = torch.nn.Conv2d(64, 64, 1).to(device)
+    t2 = torch.nn.Conv2d(64, 64, 1).to(device)
+    normal_(t1.weight, 0, 0.01)
+    normal_(t2.weight, 0, 0.01)
+    cost_volume = tCostVolume(delta_w=delta_w, delta_h=delta_h).to(device)
     displacement_map = DisplacementMap(delta_w=delta_w, delta_h=delta_h, tau=tau).to(device)
+
     img1 = pre_model(img1)
     img2 = pre_model(img2)
+    img1 = t1(img1)
+    img2 = t2(img2)
     cv = cost_volume(img1, img2)
     dp = displacement_map(cv)
     dp = torch.nn.functional.interpolate(dp, size=shape, mode='bilinear', align_corners=False)

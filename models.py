@@ -66,7 +66,7 @@ TSN Configurations:
             # print("Converting the ImageNet model to CV init model")
             # self._construct_cv_model()
             self.prev_cv_model = cost_volume_model.PreModel()
-            self.displacement_map = DisplacementMap(2, 2, 0)
+            self.displacement_map = DisplacementMap(2, 2, tau=1)
             self.late_cv_model = cost_volume_model.LateModel()
             print("CV model ready.")
 

@@ -7,7 +7,7 @@ import torchvision
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.optim
-from torch.nn.utils import clip_grad_norm
+from torch.nn.utils import clip_grad_norm_
 import tensorboardX
 from dataset import TSNDataSet
 from models import TSN
@@ -50,18 +50,6 @@ def main():
     train_augmentation = model.get_augmentation()
     if device.type == 'cuda':
         model = torch.nn.DataParallel(model, device_ids=args.gpus).cuda()
-
-    a = torch.load('ucf101_cv_checkpoint.pth.tar')['state_dict']
-    # a.pop('module.prev_cv_model.module1.conv.weight')
-    # a.pop('module.prev_cv_model.module1.conv.bias')
-    # a.pop('module.prev_cv_model.module1.bn.weight')
-    # a.pop('module.prev_cv_model.module1.bn.bias')
-    # a.pop('module.prev_cv_model.module1.bn.running_mean')
-    # a.pop('module.prev_cv_model.module1.bn.running_var')
-    # a.pop('module.late_cv_model.conv1_7x7_s2.weight')
-    weight = a['module.late_cv_model.conv1_7x7_s2.weight'][:, :2, :, :].repeat((1, 5, 1, 1))
-    a['module.late_cv_model.conv1_7x7_s2.weight'] = weight
-    model.load_state_dict(a)
 
     if args.resume:
         if os.path.isfile(args.resume):
@@ -122,8 +110,9 @@ def main():
 
     for epoch in range(0, args.epochs):
         scheduler.step()
-        # if epoch < args.start_epoch:
-        #     continue
+        if epoch < args.start_epoch:
+            continue
+
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch)
 
@@ -175,7 +164,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
         loss.backward()
 
         if args.clip_gradient is not None:
-            total_norm = clip_grad_norm(model.parameters(), args.clip_gradient)
+            total_norm = clip_grad_norm_(model.parameters(), args.clip_gradient)
             if total_norm > args.clip_gradient:
                 print("clipping gradient: {} with coef {}".format(total_norm, args.clip_gradient / total_norm))
 
@@ -194,10 +183,10 @@ def train(train_loader, model, criterion, optimizer, epoch):
                    'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
                 epoch, i, len(train_loader), batch_time=batch_time,
                 data_time=data_time, loss=losses, top1=top1, top5=top5, lr=optimizer.param_groups[-1]['lr'])))
-            writer.add_scalar('step: loss', losses.avg, epoch * len(train_loader) + i)
-            writer.add_scalar('step: top1', top1.avg, epoch * len(train_loader) + i)
-    writer.add_scalar('train: loss', losses.avg, epoch)
-    writer.add_scalar('train: top1', top1.avg, epoch)
+            writer.add_scalar('Step/Loss', losses.avg, epoch * len(train_loader) + i)
+            writer.add_scalar('Step/Top1', top1.avg, epoch * len(train_loader) + i)
+    writer.add_scalar('Train/Loss', losses.avg, epoch)
+    writer.add_scalar('Train/Top1', top1.avg, epoch)
 
 
 def validate(val_loader, model, criterion, epoch):
@@ -240,8 +229,8 @@ def validate(val_loader, model, criterion, epoch):
 
     print(('Testing Results: Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f} Loss {loss.avg:.5f}'
            .format(top1=top1, top5=top5, loss=losses)))
-    writer.add_scalar('val: loss', losses.avg, epoch)
-    writer.add_scalar('val: top1', top1.avg, epoch)
+    writer.add_scalar('Val/Loss', losses.avg, epoch)
+    writer.add_scalar('Val/Top1', top1.avg, epoch)
     return top1.avg
 
 

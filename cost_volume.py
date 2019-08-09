@@ -5,26 +5,6 @@ from torch.nn.functional import cosine_similarity
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
-class CostVolume(nn.Module):
-    def __init__(self, delta_w: int, delta_h: int):
-        super(CostVolume, self).__init__()
-        assert delta_w >= 0 and delta_h >= 0, 'delta_w and delta_h must not be less than 0'
-        self.delta_w = delta_w
-        self.delta_h = delta_h
-        self.zero_pad = nn.ConstantPad2d((delta_w, delta_w, delta_h, delta_h), 0)
-        # self.pad = nn.ReplicationPad2d((delta_w, delta_h))
-
-    def forward(self, img1, img2):
-        b, c, h, w = img2.shape
-        img2 = self.zero_pad(img2)
-        output = torch.zeros([b, h, w, 2 * self.delta_h + 1, 2 * self.delta_w + 1]).to(device).float()
-        for dh in range(self.delta_h * 2 + 1):
-            for dw in range(self.delta_w * 2 + 1):
-                output[:, :, :, dh, dw] = cosine_similarity(img1, img2[:, :, dh: dh + h, dw: dw + w], dim=1)
-
-        return output
-
-
 class Occlusion(nn.Module):
     def __init__(self):
         super(Occlusion, self).__init__()
@@ -44,6 +24,7 @@ class Occlusion(nn.Module):
         dp_rev = nn.functional.grid_sample(dp_b, torch.cat([jj, ii], dim=1).permute(0, 2, 3, 1))
 
         occlusion = (torch.norm((dp_f + dp_rev), 1, dim=1) ** 2 >= 0.01 * (torch.norm(dp_f, 1, dim=1) ** 2 + torch.norm(dp_rev, 1, dim=1) ** 2) + 0.05)
+
         return occlusion, dp_rev
 
 
@@ -79,3 +60,23 @@ class DisplacementMap(nn.Module):
             i_idx = (i_idx[:, :, :, 0] - self.delta_w) * mask
             j_idx = (j_idx[:, :, :, 0] - self.delta_h) * mask
             return torch.cat([i_idx.unsqueeze(1), j_idx.unsqueeze(1)], dim=1).float()
+
+
+class CostVolume(nn.Module):
+    def __init__(self, delta_w: int, delta_h: int):
+        super(CostVolume, self).__init__()
+        assert delta_w >= 0 and delta_h >= 0, 'delta_w and delta_h must not be less than 0'
+        self.delta_w = delta_w
+        self.delta_h = delta_h
+        # self.pad = nn.ConstantPad2d((delta_w, delta_w, delta_h, delta_h), 0)
+        self.pad = nn.ReplicationPad2d((delta_w, delta_w, delta_h, delta_h))
+
+    def forward(self, img1, img2):
+        b, c, h, w = img2.shape
+        img2 = self.pad(img2)
+        output = torch.zeros([b, h, w, 2 * self.delta_h + 1, 2 * self.delta_w + 1]).to(device).float()
+        for dh in range(self.delta_h * 2 + 1):
+            for dw in range(self.delta_w * 2 + 1):
+                output[:, :, :, dh, dw] = cosine_similarity(img1, img2[:, :, dh: dh + h, dw: dw + w], dim=1)
+
+        return output
